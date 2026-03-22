@@ -25,6 +25,7 @@ async def lifespan(app: FastAPI):
     await ml_client.startup()
     yield
     await ml_client.shutdown()
+    await engine.dispose()
 
 
 app = FastAPI(title="Compatibilidades API", lifespan=lifespan)
@@ -38,6 +39,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
+        "http://127.0.1:5173",
         settings.frontend_url,
     ],
     allow_credentials=True,
@@ -258,13 +260,3 @@ async def get_publications_without_compatibilities_refresh_status():
     return await ml_publications_service.get_refresh_status(
         user_id=str(user_id)
     )
-
-@app.on_event("startup")
-async def startup() -> None:
-    await ml_client.startup()
-
-
-@app.on_event("shutdown")
-async def shutdown() -> None:
-    await ml_client.shutdown()
-    await engine.dispose()

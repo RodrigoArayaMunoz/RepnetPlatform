@@ -339,12 +339,7 @@ function NoCompatibilitiesUpload() {
         </div>
       </section>
 
-      <ResultModal
-        open={showResultModal}
-        onClose={handleCloseResultModal}
-        summary={jobResult?.summary}
-        results={jobResult?.results}
-      />
+
 
       <ResultViewNoCompatibilities
         open={showPublicationsModal}

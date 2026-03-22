@@ -5,13 +5,13 @@ from io import BytesIO
 import pandas as pd
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-import db
+
 from repositories.informed_non_compatible_repository import InformedNonCompatibleRepository
 from services.ml_client import ml_client
 from config import settings
 
 UNIVERSAL_EXCEPTION_COMMENT = settings.ml_compatibility_exception_comment
-VALID_ITEM_COLUMNS = {"item_id", "MLC", "item", "id"}
+VALID_ITEM_COLUMNS = {"item_id", "mlc", "item", "id"}
 
 
 def _normalize_column_name(value: str) -> str:
@@ -30,8 +30,15 @@ def _extract_item_ids_from_excel(file_bytes: bytes) -> list[dict]:
     if df.empty:
         raise HTTPException(status_code=400, detail="El archivo Excel está vacío")
 
-    normalized_map = {_normalize_column_name(col): col for col in df.columns}
-    item_col = next((normalized_map[c] for c in VALID_ITEM_COLUMNS if c in normalized_map), None)
+    normalized_map = {
+        _normalize_column_name(col): col
+        for col in df.columns
+    }
+
+    item_col = next(
+        (original_col for normalized_col, original_col in normalized_map.items() if normalized_col in VALID_ITEM_COLUMNS),
+        None,
+    )
 
     if not item_col:
         raise HTTPException(
@@ -64,7 +71,10 @@ def _extract_item_ids_from_excel(file_bytes: bytes) -> list[dict]:
         )
 
     if not rows:
-        raise HTTPException(status_code=400, detail="No se encontraron item_id válidos en el Excel")
+        raise HTTPException(
+            status_code=400,
+            detail="No se encontraron item_id válidos en el Excel",
+        )
 
     return rows
 
@@ -72,11 +82,12 @@ def _extract_item_ids_from_excel(file_bytes: bytes) -> list[dict]:
 async def process_compatibility_exceptions_excel(
     file_bytes: bytes,
     user_id: int | str,
+    db_session: AsyncSession,
     access_token: str | None = None,
 ) -> dict:
     rows = _extract_item_ids_from_excel(file_bytes)
 
-    repo = InformedNonCompatibleRepository(db)
+    repo = InformedNonCompatibleRepository(db_session)
     results: list[dict] = []
 
     for row in rows:
@@ -92,7 +103,7 @@ async def process_compatibility_exceptions_excel(
             )
 
             await repo.upsert_mlc(item_id)
-            await db.commit()
+            await db_session.commit()
 
             results.append(
                 {
@@ -107,7 +118,7 @@ async def process_compatibility_exceptions_excel(
             )
 
         except HTTPException as exc:
-            await db.rollback()
+            await db_session.rollback()
             results.append(
                 {
                     "row_number": row_number,
@@ -119,8 +130,9 @@ async def process_compatibility_exceptions_excel(
                     "response": None,
                 }
             )
+
         except Exception as exc:
-            await db.rollback()
+            await db_session.rollback()
             results.append(
                 {
                     "row_number": row_number,
