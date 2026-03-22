@@ -5,6 +5,14 @@ BASE_DIR = Path(__file__).resolve().parent
 
 class Settings(BaseSettings):
 
+
+    database_url: str
+    db_echo: bool = False
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
+    db_pool_recycle: int = 1800
+
     app_env: str = "development"
     frontend_url: str = "http://localhost:5173"
 
@@ -31,6 +39,7 @@ class Settings(BaseSettings):
     #Comentario Universal para informar excepciones en no compatibilidades
     ml_compatibility_exception_comment: str = (
     "No aparecen detalles técnicos del modelo correspondiente."
+
 )
 
     # HTTP client

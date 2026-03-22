@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
+from db import engine
 
 from config import settings
 from schemas import JobResponse
@@ -43,6 +44,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 @app.get("/ml/status")
@@ -256,3 +258,13 @@ async def get_publications_without_compatibilities_refresh_status():
     return await ml_publications_service.get_refresh_status(
         user_id=str(user_id)
     )
+
+@app.on_event("startup")
+async def startup() -> None:
+    await ml_client.startup()
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    await ml_client.shutdown()
+    await engine.dispose()

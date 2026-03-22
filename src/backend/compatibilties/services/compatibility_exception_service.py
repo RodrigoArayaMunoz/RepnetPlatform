@@ -4,7 +4,9 @@ from io import BytesIO
 
 import pandas as pd
 from fastapi import HTTPException
-
+from sqlalchemy.ext.asyncio import AsyncSession
+import db
+from repositories.informed_non_compatible_repository import InformedNonCompatibleRepository
 from services.ml_client import ml_client
 from config import settings
 
@@ -74,6 +76,7 @@ async def process_compatibility_exceptions_excel(
 ) -> dict:
     rows = _extract_item_ids_from_excel(file_bytes)
 
+    repo = InformedNonCompatibleRepository(db)
     results: list[dict] = []
 
     for row in rows:
@@ -88,6 +91,9 @@ async def process_compatibility_exceptions_excel(
                 user_id=user_id,
             )
 
+            await repo.upsert_mlc(item_id)
+            await db.commit()
+
             results.append(
                 {
                     "row_number": row_number,
@@ -101,6 +107,7 @@ async def process_compatibility_exceptions_excel(
             )
 
         except HTTPException as exc:
+            await db.rollback()
             results.append(
                 {
                     "row_number": row_number,
@@ -113,6 +120,7 @@ async def process_compatibility_exceptions_excel(
                 }
             )
         except Exception as exc:
+            await db.rollback()
             results.append(
                 {
                     "row_number": row_number,

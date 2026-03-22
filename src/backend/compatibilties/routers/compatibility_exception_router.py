@@ -1,4 +1,6 @@
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from db import get_db_session
 
 from services.compatibility_exception_service import (
     UNIVERSAL_EXCEPTION_COMMENT,
@@ -37,3 +39,18 @@ async def upload_compatibility_exceptions_excel(
         "filename": file.filename,
         "comment_used": UNIVERSAL_EXCEPTION_COMMENT,
     }
+
+@router.post("/compatibility-exceptions/process-excel")
+async def process_compatibility_exceptions(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db_session),
+):
+    user_id = token_store.first_user_id()
+    file_bytes = await file.read()
+
+    result = await process_compatibility_exceptions_excel(
+        file_bytes=file_bytes,
+        user_id=str(user_id),
+        db=db,
+    )
+    return result
