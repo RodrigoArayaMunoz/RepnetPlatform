@@ -5,7 +5,7 @@ import sys
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-# Agrega src/backend/compatibilities al path
+# Agrega src/backend/compatibilties al path
 BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
@@ -20,8 +20,22 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
-config.set_main_option("sqlalchemy.url", sync_url)
+
+def get_sync_database_url() -> str:
+    """
+    Convierte la URL async de la app a una URL sync para Alembic.
+    Ejemplo:
+    postgresql+asyncpg://... -> postgresql+psycopg2://...
+    """
+    database_url = settings.database_url
+
+    if "+asyncpg" in database_url:
+        return database_url.replace("+asyncpg", "+psycopg2")
+
+    return database_url
+
+
+config.set_main_option("sqlalchemy.url", get_sync_database_url())
 
 target_metadata = Base.metadata
 

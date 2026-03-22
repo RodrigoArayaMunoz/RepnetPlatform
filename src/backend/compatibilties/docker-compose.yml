@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: postgres:16
+    container_name: compat_postgres
+    environment:
+      POSTGRES_DB: RepnetPlatform
+      POSTGRES_USER: repnet
+      POSTGRES_PASSWORD: repnet123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U repnet -d RepnetPlatform"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   redis:
     image: redis:7
     container_name: compat_redis
@@ -25,10 +43,14 @@ services:
     env_file:
       - .env
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    command: >
+      sh -c "alembic -c alembic.ini upgrade head &&
+             uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
 
   worker_dispatch:
     build:
@@ -41,8 +63,12 @@ services:
     env_file:
       - .env
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
+      api:
+        condition: service_started
     restart: unless-stopped
     command: celery -A celery_app:celery_app worker -Q compat_dispatch --concurrency=1 --loglevel=info
 
@@ -57,7 +83,14 @@ services:
     env_file:
       - .env
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
+      api:
+        condition: service_started
     restart: unless-stopped
     command: celery -A celery_app:celery_app worker -Q compat_chunks --concurrency=1 --loglevel=info
+
+volumes:
+  postgres_data:
