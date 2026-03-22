@@ -437,7 +437,7 @@ return (
             disabled={!mlVerified || checkingConnection || loadingProcess || loadingResult}
             type="button"
           >
-            Ver Publicaciones sin compatibilidades
+            Ver Publicaciones No Informadas
           </button>
         </div>
 

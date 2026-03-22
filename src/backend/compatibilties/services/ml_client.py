@@ -455,4 +455,38 @@ def pick_value_id_by_name(values: list[dict], wanted_name: str) -> str | None:
     return None
 
 
+## INFORMAR EXCEPCIONES DE COMPATIBILIDAD (COMENTARIO SERÁ POR DEFECTO EL MISMO PARA TODOS)
+async def add_item_compatibility_exception(
+        self,
+        access_token: str | None,
+        item_id: str,
+        comment: str,
+        user_id: int | str | None = None,
+    ) -> dict:
+        clean_item_id = str(item_id).strip()
+        clean_comment = str(comment).strip()
+
+        if not clean_item_id:
+            raise HTTPException(status_code=400, detail="item_id es obligatorio")
+
+        if not clean_comment:
+            raise HTTPException(status_code=400, detail="comment es obligatorio")
+
+        if len(clean_comment) > 255:
+            raise HTTPException(
+                status_code=400,
+                detail="El comentario no puede superar 255 caracteres",
+            )
+
+        data = await self.request(
+            "POST",
+            f"/items/{clean_item_id}/compatibilities/exception",
+            access_token=access_token,
+            json_body={"comment": clean_comment},
+            user_id=user_id,
+        )
+
+        return data if isinstance(data, dict) else {"raw_response": data}
+
+
 ml_client = MercadoLibreClient()

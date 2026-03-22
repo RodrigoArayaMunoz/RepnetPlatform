@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     ml_domain_id: str = "MLC-CARS_AND_VANS_FOR_COMPATIBILITIES"
     ml_site_id: str = "MLC"
 
+    #Comentario Universal para informar excepciones en no compatibilidades
+    ml_compatibility_exception_comment: str = (
+    "No aparecen detalles técnicos del modelo correspondiente."
+)
+
     # HTTP client
     ml_http_timeout: float = 30.0
     ml_http_max_connections: int = 20
