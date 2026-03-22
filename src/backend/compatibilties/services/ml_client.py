@@ -410,83 +410,84 @@ class MercadoLibreClient:
             user_id=user_id,
         )
         return data if isinstance(data, dict) else {"raw_response": data}
+    
 
+        ## INFORMAR EXCEPCIONES DE COMPATIBILIDAD (COMENTARIO SERÁ POR DEFECTO EL MISMO PARA TODOS)
+    async def add_item_compatibility_exception(
+            self,
+            access_token: str | None,
+            item_id: str,
+            comment: str,
+            user_id: int | str | None = None,
+        ) -> dict:
+            clean_item_id = str(item_id).strip()
+            clean_comment = str(comment).strip()
 
-def extract_values_list(data: Any) -> list[dict]:
-    if isinstance(data, list):
-        return [x for x in data if isinstance(x, dict)]
+            if not clean_item_id:
+                raise HTTPException(status_code=400, detail="item_id es obligatorio")
 
-    if isinstance(data, dict):
-        values = data.get("values")
-        if isinstance(values, list):
-            return [x for x in values if isinstance(x, dict)]
+            if not clean_comment:
+                raise HTTPException(status_code=400, detail="comment es obligatorio")
 
-        results = data.get("results")
-        if isinstance(results, list):
-            return [x for x in results if isinstance(x, dict)]
+            if len(clean_comment) > 255:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El comentario no puede superar 255 caracteres",
+                )
 
-        top_values = data.get("top_values")
-        if isinstance(top_values, list):
-            return [x for x in top_values if isinstance(x, dict)]
-
-    return []
-
-
-def pick_value_id_by_name(values: list[dict], wanted_name: str) -> str | None:
-    wanted = normalize_for_compare(wanted_name)
-    if not wanted:
-        return None
-
-    for item in values:
-        name = normalize_for_compare(item.get("name"))
-        if name == wanted:
-            return str(item.get("id"))
-
-    for item in values:
-        name = normalize_for_compare(item.get("name"))
-        if wanted in name:
-            return str(item.get("id"))
-
-    for item in values:
-        name = normalize_for_compare(item.get("name"))
-        if name and name in wanted:
-            return str(item.get("id"))
-
-    return None
-
-
-## INFORMAR EXCEPCIONES DE COMPATIBILIDAD (COMENTARIO SERÁ POR DEFECTO EL MISMO PARA TODOS)
-async def add_item_compatibility_exception(
-        self,
-        access_token: str | None,
-        item_id: str,
-        comment: str,
-        user_id: int | str | None = None,
-    ) -> dict:
-        clean_item_id = str(item_id).strip()
-        clean_comment = str(comment).strip()
-
-        if not clean_item_id:
-            raise HTTPException(status_code=400, detail="item_id es obligatorio")
-
-        if not clean_comment:
-            raise HTTPException(status_code=400, detail="comment es obligatorio")
-
-        if len(clean_comment) > 255:
-            raise HTTPException(
-                status_code=400,
-                detail="El comentario no puede superar 255 caracteres",
+            data = await self.request(
+                "POST",
+                f"/items/{clean_item_id}/compatibilities/exception",
+                access_token=access_token,
+                json_body={"comment": clean_comment},
+                user_id=user_id,
             )
 
-        data = await self.request(
-            "POST",
-            f"/items/{clean_item_id}/compatibilities/exception",
-            access_token=access_token,
-            json_body={"comment": clean_comment},
-            user_id=user_id,
-        )
+            return data if isinstance(data, dict) else {"raw_response": data}
 
-        return data if isinstance(data, dict) else {"raw_response": data}
+
+    def extract_values_list(data: Any) -> list[dict]:
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict)]
+
+        if isinstance(data, dict):
+            values = data.get("values")
+            if isinstance(values, list):
+                return [x for x in values if isinstance(x, dict)]
+
+            results = data.get("results")
+            if isinstance(results, list):
+                return [x for x in results if isinstance(x, dict)]
+
+            top_values = data.get("top_values")
+            if isinstance(top_values, list):
+                return [x for x in top_values if isinstance(x, dict)]
+
+        return []
+
+
+    def pick_value_id_by_name(values: list[dict], wanted_name: str) -> str | None:
+        wanted = normalize_for_compare(wanted_name)
+        if not wanted:
+            return None
+
+        for item in values:
+            name = normalize_for_compare(item.get("name"))
+            if name == wanted:
+                return str(item.get("id"))
+
+        for item in values:
+            name = normalize_for_compare(item.get("name"))
+            if wanted in name:
+                return str(item.get("id"))
+
+        for item in values:
+            name = normalize_for_compare(item.get("name"))
+            if name and name in wanted:
+                return str(item.get("id"))
+
+        return None
+
 
 
 ml_client = MercadoLibreClient()

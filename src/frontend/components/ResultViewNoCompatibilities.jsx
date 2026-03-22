@@ -254,7 +254,13 @@ const handleExportToExcel = async () => {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="custom-modal-header">
-          <h2>Publicaciones sin compatibilidades</h2>
+            <div className="custom-modal-title-group">
+                <h2>Publicaciones con compatibilidades no informadas</h2>
+                    <p className="publications-warning-text">
+                        No aparecen detalles técnicos del modelo correspondiente.
+                    </p>
+            </div>
+            
           <button className="custom-modal-close" onClick={onClose}>
             ×
           </button>

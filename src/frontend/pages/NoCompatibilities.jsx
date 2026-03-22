@@ -1,7 +1,7 @@
 import "../styles/NoCompatibilitiesUpload.css";
 import { useEffect, useState, useRef } from "react";
 import ResultModal from "../components/ResultModal";
-import PublicationsWithoutCompatibilityModal from "../components/PublicationsWithoutCompatibilityModal";
+import ResultViewNoCompatibilities from "../components/ResultViewNoCompatibilities";
 
 function ProcessingOverlay({ visible, progress = 0, message = "" }) {
   if (!visible) return null;
@@ -346,7 +346,7 @@ function NoCompatibilitiesUpload() {
         results={jobResult?.results}
       />
 
-      <PublicationsWithoutCompatibilityModal
+      <ResultViewNoCompatibilities
         open={showPublicationsModal}
         onClose={handleClosePublicationsModal}
         apiBase={API_BASE}

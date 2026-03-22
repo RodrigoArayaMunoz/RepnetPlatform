@@ -248,3 +248,20 @@
 .refresh-results-button:hover {
   background: #15803d;
 }
+
+.custom-modal-title-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.custom-modal-title-group h2 {
+  margin: 0;
+}
+
+.publications-warning-text {
+  margin: 8px 0 0;
+  font-size: 16px; /* tamaño mediano */
+  font-weight: 700; /* bold */
+  color: #dc2626; /* rojo */
+  line-height: 1.4;
+}
