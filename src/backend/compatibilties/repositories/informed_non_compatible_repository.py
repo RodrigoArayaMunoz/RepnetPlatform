@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db_models import InformedNonCompatibleMLC
@@ -10,8 +10,29 @@ class InformedNonCompatibleRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    def _normalize_mlc(self, mlc: str | None) -> str:
+        return str(mlc or "").strip().upper()
+
+    def _normalize_mlcs(self, mlcs: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+
+        for mlc in mlcs:
+            clean_mlc = self._normalize_mlc(mlc)
+            if not clean_mlc:
+                continue
+            if clean_mlc in seen:
+                continue
+            seen.add(clean_mlc)
+            normalized.append(clean_mlc)
+
+        return normalized
+
     async def get_by_mlc(self, mlc: str) -> InformedNonCompatibleMLC | None:
-        clean_mlc = str(mlc).strip().upper()
+        clean_mlc = self._normalize_mlc(mlc)
+
+        if not clean_mlc:
+            return None
 
         stmt = select(InformedNonCompatibleMLC).where(
             InformedNonCompatibleMLC.mlc == clean_mlc
@@ -19,13 +40,79 @@ class InformedNonCompatibleRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_existing_mlcs(self, mlcs: list[str]) -> set[str]:
+        clean_mlcs = self._normalize_mlcs(mlcs)
+        if not clean_mlcs:
+            return set()
+
+        stmt = select(InformedNonCompatibleMLC.mlc).where(
+            InformedNonCompatibleMLC.mlc.in_(clean_mlcs)
+        )
+        result = await self.session.execute(stmt)
+        return {
+            self._normalize_mlc(value)
+            for value in result.scalars().all()
+            if self._normalize_mlc(value)
+        }
+
+    async def bulk_insert_mlcs(
+        self,
+        mlcs: list[str],
+        has_exception: bool = False,
+    ) -> int:
+        clean_mlcs = self._normalize_mlcs(mlcs)
+        if not clean_mlcs:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        objects = [
+            InformedNonCompatibleMLC(
+                mlc=mlc,
+                informed_at=now,
+                updated_at=now,
+                has_exception=has_exception,
+            )
+            for mlc in clean_mlcs
+        ]
+
+        self.session.add_all(objects)
+        await self.session.flush()
+        return len(objects)
+
+    async def bulk_update_mlcs(
+        self,
+        mlcs: list[str],
+        has_exception: bool = False,
+    ) -> int:
+        clean_mlcs = self._normalize_mlcs(mlcs)
+        if not clean_mlcs:
+            return 0
+
+        now = datetime.now(timezone.utc)
+
+        stmt = (
+            update(InformedNonCompatibleMLC)
+            .where(InformedNonCompatibleMLC.mlc.in_(clean_mlcs))
+            .values(
+                informed_at=now,
+                updated_at=now,
+                has_exception=has_exception,
+            )
+        )
+
+        result = await self.session.execute(stmt)
+        return result.rowcount or 0
+
     async def upsert_mlc(
         self,
         mlc: str,
         has_exception: bool = False,
     ) -> InformedNonCompatibleMLC:
-        clean_mlc = str(mlc).strip().upper()
+        clean_mlc = self._normalize_mlc(mlc)
         now = datetime.now(timezone.utc)
+
+        if not clean_mlc:
+            raise ValueError("MLC inválido")
 
         existing = await self.get_by_mlc(clean_mlc)
         if existing:
@@ -50,7 +137,7 @@ class InformedNonCompatibleRepository:
             InformedNonCompatibleMLC.has_exception.is_(True)
         )
 
-        clean_search = str(search_text or "").strip().upper()
+        clean_search = self._normalize_mlc(search_text)
         if clean_search:
             stmt = stmt.where(
                 InformedNonCompatibleMLC.mlc.ilike(f"%{clean_search}%")
@@ -76,7 +163,7 @@ class InformedNonCompatibleRepository:
             .offset(offset)
         )
 
-        clean_search = str(search_text or "").strip().upper()
+        clean_search = self._normalize_mlc(search_text)
         if clean_search:
             stmt = stmt.where(
                 InformedNonCompatibleMLC.mlc.ilike(f"%{clean_search}%")
@@ -84,4 +171,4 @@ class InformedNonCompatibleRepository:
 
         result = await self.session.execute(stmt)
         rows = result.scalars().all()
-        return [str(x).strip().upper() for x in rows if x]
+        return [self._normalize_mlc(x) for x in rows if self._normalize_mlc(x)]
