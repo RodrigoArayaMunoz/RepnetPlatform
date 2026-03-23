@@ -10,7 +10,7 @@ function ProcessingOverlay({ visible, progress = 0, message = "" }) {
     <div className="processing-overlay">
       <div className="processing-box">
         <div className="processing-spinner" />
-        <h2>Procesando compatibilidades</h2>
+        <h2>Informando No Compatibilidades</h2>
         <p className="processing-progress">{progress}%</p>
         <p className="processing-message">
           {message || "Procesando archivo..."}

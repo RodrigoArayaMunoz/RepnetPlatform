@@ -12,6 +12,7 @@ from services.ml_client import ml_client
 
 UNIVERSAL_EXCEPTION_COMMENT = settings.ml_compatibility_exception_comment
 VALID_ITEM_COLUMNS = {"item_id", "mlc", "item", "id"}
+ML_EXCEPTION_CONCURRENCY = 2
 
 
 def _normalize_column_name(value: str) -> str:
@@ -127,60 +128,22 @@ async def process_compatibility_exceptions_excel(
     rows = extracted["rows"]
 
     repo = InformedNonCompatibleRepository(db_session)
-    ml_results: list[dict] = []
-    successful_item_ids: list[str] = []
 
-    for row in rows:
-        item_id = row["item_id"]
-        row_number = row["row_number"]
+    access_token = access_token or await ml_client.get_valid_token(user_id)
 
-        try:
-            response = await ml_client.add_item_compatibility_exception(
-                access_token=access_token,
-                item_id=item_id,
-                comment=UNIVERSAL_EXCEPTION_COMMENT,
-                user_id=user_id,
-            )
+    ml_results = await ml_client.add_item_compatibility_exceptions_parallel(
+        rows=rows,
+        comment=UNIVERSAL_EXCEPTION_COMMENT,
+        access_token=access_token,
+        user_id=user_id,
+        concurrency=ML_EXCEPTION_CONCURRENCY,
+    )
 
-            successful_item_ids.append(item_id)
-
-            ml_results.append(
-                {
-                    "row_number": row_number,
-                    "item_id": item_id,
-                    "comment": UNIVERSAL_EXCEPTION_COMMENT,
-                    "success": True,
-                    "status_code": 200,
-                    "message": "Excepción cargada correctamente",
-                    "response": response,
-                }
-            )
-
-        except HTTPException as exc:
-            ml_results.append(
-                {
-                    "row_number": row_number,
-                    "item_id": item_id,
-                    "comment": UNIVERSAL_EXCEPTION_COMMENT,
-                    "success": False,
-                    "status_code": exc.status_code,
-                    "message": exc.detail,
-                    "response": None,
-                }
-            )
-
-        except Exception as exc:
-            ml_results.append(
-                {
-                    "row_number": row_number,
-                    "item_id": item_id,
-                    "comment": UNIVERSAL_EXCEPTION_COMMENT,
-                    "success": False,
-                    "status_code": 500,
-                    "message": f"Error inesperado: {exc}",
-                    "response": None,
-                }
-            )
+    successful_item_ids = [
+        result["item_id"]
+        for result in ml_results
+        if result.get("success") and result.get("item_id")
+    ]
 
     db_inserted = 0
     db_updated = 0

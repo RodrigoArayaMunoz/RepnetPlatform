@@ -410,43 +410,94 @@ class MercadoLibreClient:
             user_id=user_id,
         )
         return data if isinstance(data, dict) else {"raw_response": data}
-    
 
-        ## INFORMAR EXCEPCIONES DE COMPATIBILIDAD (COMENTARIO SERÁ POR DEFECTO EL MISMO PARA TODOS)
     async def add_item_compatibility_exception(
-            self,
-            access_token: str | None,
-            item_id: str,
-            comment: str,
-            user_id: int | str | None = None,
-        ) -> dict:
-            clean_item_id = str(item_id).strip()
-            clean_comment = str(comment).strip()
+        self,
+        access_token: str | None,
+        item_id: str,
+        comment: str,
+        user_id: int | str | None = None,
+    ) -> dict:
+        clean_item_id = str(item_id).strip().upper()
+        clean_comment = str(comment).strip()
 
-            if not clean_item_id:
-                raise HTTPException(status_code=400, detail="item_id es obligatorio")
+        if not clean_item_id:
+            raise HTTPException(status_code=400, detail="item_id es obligatorio")
 
-            if not clean_comment:
-                raise HTTPException(status_code=400, detail="comment es obligatorio")
+        if not clean_comment:
+            raise HTTPException(status_code=400, detail="comment es obligatorio")
 
-            if len(clean_comment) > 255:
-                raise HTTPException(
-                    status_code=400,
-                    detail="El comentario no puede superar 255 caracteres",
-                )
-
-            data = await self.request(
-                "POST",
-                f"/items/{clean_item_id}/compatibilities/exception",
-                access_token=access_token,
-                json_body={"comment": clean_comment},
-                user_id=user_id,
+        if len(clean_comment) > 255:
+            raise HTTPException(
+                status_code=400,
+                detail="El comentario no puede superar 255 caracteres",
             )
 
-            return data if isinstance(data, dict) else {"raw_response": data}
+        data = await self.request(
+            "POST",
+            f"/items/{clean_item_id}/compatibilities/exception",
+            access_token=access_token,
+            json_body={"comment": clean_comment},
+            user_id=user_id,
+        )
 
+        return data if isinstance(data, dict) else {"raw_response": data}
 
-    ## EXTRAER MULTIGET DE ITEMS CON SUS MLC Y TÍTULO PARA MOSTRAR EN RESULTADOS DE EXCEPCIONES DE COMPATIBILIDAD
+    async def add_item_compatibility_exceptions_parallel(
+        self,
+        rows: list[dict],
+        comment: str,
+        access_token: str | None,
+        user_id: int | str | None = None,
+        concurrency: int = 5,
+    ) -> list[dict]:
+        semaphore = asyncio.Semaphore(max(1, concurrency))
+
+        async def _worker(row: dict) -> dict:
+            item_id = str(row.get("item_id", "")).strip().upper()
+            row_number = row.get("row_number")
+
+            async with semaphore:
+                try:
+                    response = await self.add_item_compatibility_exception(
+                        access_token=access_token,
+                        item_id=item_id,
+                        comment=comment,
+                        user_id=user_id,
+                    )
+                    return {
+                        "row_number": row_number,
+                        "item_id": item_id,
+                        "comment": comment,
+                        "success": True,
+                        "status_code": 200,
+                        "message": "Excepción cargada correctamente",
+                        "response": response,
+                    }
+                except HTTPException as exc:
+                    return {
+                        "row_number": row_number,
+                        "item_id": item_id,
+                        "comment": comment,
+                        "success": False,
+                        "status_code": exc.status_code,
+                        "message": exc.detail,
+                        "response": None,
+                    }
+                except Exception as exc:
+                    return {
+                        "row_number": row_number,
+                        "item_id": item_id,
+                        "comment": comment,
+                        "success": False,
+                        "status_code": 500,
+                        "message": f"Error inesperado: {exc}",
+                        "response": None,
+                    }
+
+        tasks = [_worker(row) for row in rows]
+        return await asyncio.gather(*tasks)
+
     async def get_items_multiget(
         self,
         item_ids: list[str],
@@ -502,7 +553,7 @@ class MercadoLibreClient:
 
         return items
 
-
+    @staticmethod
     def extract_values_list(data: Any) -> list[dict]:
         if isinstance(data, list):
             return [x for x in data if isinstance(x, dict)]
@@ -522,7 +573,7 @@ class MercadoLibreClient:
 
         return []
 
-
+    @staticmethod
     def pick_value_id_by_name(values: list[dict], wanted_name: str) -> str | None:
         wanted = normalize_for_compare(wanted_name)
         if not wanted:
@@ -544,7 +595,6 @@ class MercadoLibreClient:
                 return str(item.get("id"))
 
         return None
-
 
 
 ml_client = MercadoLibreClient()
