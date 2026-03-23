@@ -446,6 +446,63 @@ class MercadoLibreClient:
             return data if isinstance(data, dict) else {"raw_response": data}
 
 
+    ## EXTRAER MULTIGET DE ITEMS CON SUS MLC Y TÍTULO PARA MOSTRAR EN RESULTADOS DE EXCEPCIONES DE COMPATIBILIDAD
+    async def get_items_multiget(
+        self,
+        item_ids: list[str],
+        access_token: str | None = None,
+        user_id: int | str | None = None,
+    ) -> list[dict]:
+        clean_ids = [
+            str(item_id).strip().upper()
+            for item_id in item_ids
+            if str(item_id).strip()
+        ]
+
+        if not clean_ids:
+            return []
+
+        response = await self.request(
+            "GET",
+            "/items",
+            access_token=access_token,
+            params={
+                "ids": ",".join(clean_ids),
+                "attributes": "id,title",
+            },
+            user_id=user_id,
+        )
+
+        if not isinstance(response, list):
+            raise HTTPException(
+                status_code=500,
+                detail="Respuesta inválida en multiget de items",
+            )
+
+        items: list[dict] = []
+
+        for entry in response:
+            if not isinstance(entry, dict):
+                continue
+
+            body = entry.get("body")
+            if not isinstance(body, dict):
+                continue
+
+            item_id = body.get("id")
+            title = body.get("title")
+
+            if item_id:
+                items.append(
+                    {
+                        "id": str(item_id),
+                        "title": str(title or ""),
+                    }
+                )
+
+        return items
+
+
     def extract_values_list(data: Any) -> list[dict]:
         if isinstance(data, list):
             return [x for x in data if isinstance(x, dict)]

@@ -28,6 +28,11 @@ function PublicationsWithoutCompatibilityModal({ open, onClose, apiBase }) {
     setDebouncedSearchText("");
     setRefreshMessage("");
     setError("");
+    setItems([]);
+    setTotal(0);
+    setTotalPages(0);
+    setHasNext(false);
+    setHasPrev(false);
   }, [open]);
 
   useEffect(() => {
@@ -57,7 +62,7 @@ function PublicationsWithoutCompatibilityModal({ open, onClose, apiBase }) {
         }
 
         const res = await fetch(
-          `${apiBase}/publications/without-compatibilities?${params.toString()}`,
+          `${apiBase}/publications/without-compatibilities-details?${params.toString()}`,
           {
             method: "GET",
             credentials: "include",
@@ -179,71 +184,71 @@ function PublicationsWithoutCompatibilityModal({ open, onClose, apiBase }) {
     }
   };
 
-const handleExportToExcel = async () => {
-  try {
-    setExporting(true);
-    setError("");
+  const handleExportToExcel = async () => {
+    try {
+      setExporting(true);
+      setError("");
 
-    const params = new URLSearchParams();
+      const params = new URLSearchParams();
 
-    if (debouncedSearchText) {
-      params.append("q", debouncedSearchText);
-    }
-
-    const url = `${apiBase}/publications/without-compatibilities/export${
-      params.toString() ? `?${params.toString()}` : ""
-    }`;
-
-    const res = await fetch(url, {
-      method: "GET",
-      credentials: "include",
-    });
-
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-
-      let message =
-        data?.detail || data?.message || "No se pudo exportar el archivo Excel.";
-
-      if (Array.isArray(data?.detail)) {
-        message = data.detail
-          .map((item) => item?.msg || JSON.stringify(item))
-          .join(" | ");
-      } else if (data?.detail && typeof data.detail === "object") {
-        message = data.detail.msg || JSON.stringify(data.detail);
+      if (debouncedSearchText) {
+        params.append("q", debouncedSearchText);
       }
 
-      throw new Error(message);
-    }
+      const url = `${apiBase}/publications/without-compatibilities/export${
+        params.toString() ? `?${params.toString()}` : ""
+      }`;
 
-    const blob = await res.blob();
+      const res = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+      });
 
-    const contentDisposition = res.headers.get("Content-Disposition");
-    let fileName = "publicaciones_sin_compatibilidades.xlsx";
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
 
-    if (contentDisposition) {
-      const match = contentDisposition.match(/filename="(.+)"/);
-      if (match?.[1]) {
-        fileName = match[1];
+        let message =
+          data?.detail || data?.message || "No se pudo exportar el archivo Excel.";
+
+        if (Array.isArray(data?.detail)) {
+          message = data.detail
+            .map((item) => item?.msg || JSON.stringify(item))
+            .join(" | ");
+        } else if (data?.detail && typeof data.detail === "object") {
+          message = data.detail.msg || JSON.stringify(data.detail);
+        }
+
+        throw new Error(message);
       }
-    }
 
-    const downloadUrl = window.URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = downloadUrl;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(downloadUrl);
-  } catch (err) {
-    setError(
-      err?.message || "Ocurrió un error al exportar las publicaciones."
-    );
-  } finally {
-    setExporting(false);
-  }
-};
+      const blob = await res.blob();
+
+      const contentDisposition = res.headers.get("Content-Disposition");
+      let fileName = "publicaciones_sin_compatibilidades.xlsx";
+
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="(.+)"/);
+        if (match?.[1]) {
+          fileName = match[1];
+        }
+      }
+
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      setError(
+        err?.message || "Ocurrió un error al exportar las publicaciones."
+      );
+    } finally {
+      setExporting(false);
+    }
+  };
 
   if (!open) return null;
 
@@ -254,13 +259,13 @@ const handleExportToExcel = async () => {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="custom-modal-header">
-            <div className="custom-modal-title-group">
-                <h2>Publicaciones con compatibilidades no informadas</h2>
-                    <p className="publications-warning-text">
-                        No aparecen detalles técnicos del modelo correspondiente.
-                    </p>
-            </div>
-            
+          <div className="custom-modal-title-group">
+            <h2>Publicaciones con compatibilidades no informadas</h2>
+            <p className="publications-warning-text">
+              No aparecen detalles técnicos del modelo correspondiente.
+            </p>
+          </div>
+
           <button className="custom-modal-close" onClick={onClose}>
             ×
           </button>

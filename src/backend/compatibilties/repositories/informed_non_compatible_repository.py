@@ -1,7 +1,7 @@
 # src/backend/compatibilities/repositories/informed_non_compatible_repository.py
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select,func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db_models import InformedNonCompatibleMLC
@@ -45,3 +45,26 @@ class InformedNonCompatibleRepository:
         self.session.add(obj)
         await self.session.flush()
         return obj
+    
+
+    #CONTAR TODOS LOS MLC INFORMADOS PARA PAGINAR EN FRONTEND
+    async def count_all(self) -> int:
+        stmt = select(func.count()).select_from(InformedNonCompatibleMLC)
+        result = await self.session.execute(stmt)
+        return int(result.scalar_one() or 0)
+
+    #AGRUPAR DE A 20 REGISTROS PARA MOSTRAR EN FRONTEND
+    async def list_mlc_page(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[str]:
+        stmt = (
+            select(InformedNonCompatibleMLC.mlc)
+            .order_by(InformedNonCompatibleMLC.updated_at.desc(), InformedNonCompatibleMLC.mlc.asc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self.session.execute(stmt)
+        rows = result.scalars().all()
+        return [str(x).strip().upper() for x in rows if x]
