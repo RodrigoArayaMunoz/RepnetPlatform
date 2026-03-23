@@ -103,7 +103,7 @@ async def process_compatibility_exceptions_excel(
             )
 
             await repo.upsert_mlc(
-                item_id=item_id,
+                item_id,
                 has_exception=True,
                 )
             
