@@ -102,7 +102,11 @@ async def process_compatibility_exceptions_excel(
                 user_id=user_id,
             )
 
-            await repo.upsert_mlc(item_id)
+            await repo.upsert_mlc(
+                item_id=item_id,
+                has_exception=True,
+                )
+            
             await db_session.commit()
 
             results.append(
