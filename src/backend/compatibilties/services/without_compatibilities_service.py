@@ -22,21 +22,26 @@ async def get_without_compatibilities_with_titles(
     safe_page = max(1, int(page))
     safe_page_size = max(1, min(int(page_size), MAX_BATCH_SIZE))
     offset = (safe_page - 1) * safe_page_size
-    search_text = str(q or "").strip().lower()
+    search_text = str(q or "").strip()
 
     repo = InformedNonCompatibleRepository(db_session)
 
-    total = await repo.count_all()
-    mlcs = await repo.list_mlc_page(limit=safe_page_size, offset=offset)
+    total = await repo.count_filtered(search_text=search_text)
+    mlcs = await repo.list_mlc_filtered_page(
+        limit=safe_page_size,
+        offset=offset,
+        search_text=search_text,
+    )
 
     if not mlcs:
+        total_pages = ceil(total / safe_page_size) if total > 0 else 0
         return {
             "ok": True,
             "items": [],
-            "total": 0 if search_text else total,
+            "total": total,
             "page": safe_page,
             "page_size": safe_page_size,
-            "total_pages": 0,
+            "total_pages": total_pages,
             "has_next": False,
             "has_prev": safe_page > 1,
         }
@@ -58,25 +63,6 @@ async def get_without_compatibilities_with_titles(
                 "title": item["title"] if item else "",
             }
         )
-
-    if search_text:
-        results = [
-            item for item in results
-            if search_text in item["mlc"].lower() or search_text in item["title"].lower()
-        ]
-        filtered_total = len(results)
-        total_pages = 1 if filtered_total > 0 else 0
-
-        return {
-            "ok": True,
-            "items": results,
-            "total": filtered_total,
-            "page": 1,
-            "page_size": safe_page_size,
-            "total_pages": total_pages,
-            "has_next": False,
-            "has_prev": False,
-        }
 
     total_pages = ceil(total / safe_page_size) if total > 0 else 0
 

@@ -1,7 +1,6 @@
-# src/backend/compatibilities/repositories/informed_non_compatible_repository.py
 from datetime import datetime, timezone
 
-from sqlalchemy import select,func
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db_models import InformedNonCompatibleMLC
@@ -45,26 +44,44 @@ class InformedNonCompatibleRepository:
         self.session.add(obj)
         await self.session.flush()
         return obj
-    
 
-    #CONTAR TODOS LOS MLC INFORMADOS PARA PAGINAR EN FRONTEND
-    async def count_all(self) -> int:
-        stmt = select(func.count()).select_from(InformedNonCompatibleMLC)
+    async def count_filtered(self, search_text: str = "") -> int:
+        stmt = select(func.count()).select_from(InformedNonCompatibleMLC).where(
+            InformedNonCompatibleMLC.has_exception.is_(True)
+        )
+
+        clean_search = str(search_text or "").strip().upper()
+        if clean_search:
+            stmt = stmt.where(
+                InformedNonCompatibleMLC.mlc.ilike(f"%{clean_search}%")
+            )
+
         result = await self.session.execute(stmt)
         return int(result.scalar_one() or 0)
 
-    #AGRUPAR DE A 20 REGISTROS PARA MOSTRAR EN FRONTEND
-    async def list_mlc_page(
+    async def list_mlc_filtered_page(
         self,
         limit: int = 20,
         offset: int = 0,
+        search_text: str = "",
     ) -> list[str]:
         stmt = (
             select(InformedNonCompatibleMLC.mlc)
-            .order_by(InformedNonCompatibleMLC.updated_at.desc(), InformedNonCompatibleMLC.mlc.asc())
+            .where(InformedNonCompatibleMLC.has_exception.is_(True))
+            .order_by(
+                InformedNonCompatibleMLC.updated_at.desc(),
+                InformedNonCompatibleMLC.mlc.asc(),
+            )
             .limit(limit)
             .offset(offset)
         )
+
+        clean_search = str(search_text or "").strip().upper()
+        if clean_search:
+            stmt = stmt.where(
+                InformedNonCompatibleMLC.mlc.ilike(f"%{clean_search}%")
+            )
+
         result = await self.session.execute(stmt)
         rows = result.scalars().all()
         return [str(x).strip().upper() for x in rows if x]

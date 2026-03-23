@@ -14,6 +14,7 @@ router = APIRouter(prefix="/publications", tags=["publications"])
 async def without_compatibilities_details(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=20),
+    q : str = Query(""),
     db_session: AsyncSession = Depends(get_db_session),
 ):
     
@@ -33,4 +34,5 @@ async def without_compatibilities_details(
             access_token=access_token,
             page=page,
             page_size=page_size,
+            q = q,
         )
