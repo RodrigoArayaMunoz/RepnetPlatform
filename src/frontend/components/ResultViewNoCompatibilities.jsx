@@ -14,8 +14,6 @@ function PublicationsWithoutCompatibilityModal({ open, onClose, apiBase }) {
   const [hasNext, setHasNext] = useState(false);
   const [hasPrev, setHasPrev] = useState(false);
 
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshMessage, setRefreshMessage] = useState("");
   const [exporting, setExporting] = useState(false);
 
   const pageSize = 20;
@@ -26,7 +24,6 @@ function PublicationsWithoutCompatibilityModal({ open, onClose, apiBase }) {
     setCurrentPage(1);
     setSearchText("");
     setDebouncedSearchText("");
-    setRefreshMessage("");
     setError("");
     setItems([]);
     setTotal(0);
@@ -110,78 +107,6 @@ function PublicationsWithoutCompatibilityModal({ open, onClose, apiBase }) {
   const handleNextPage = () => {
     if (!hasNext || loading) return;
     setCurrentPage((prev) => prev + 1);
-  };
-
-  const handleRefreshResults = async () => {
-    try {
-      setRefreshing(true);
-      setRefreshMessage("Actualizando índice...");
-
-      const res = await fetch(
-        `${apiBase}/publications/without-compatibilities/refresh`,
-        {
-          method: "POST",
-          credentials: "include",
-        }
-      );
-
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        throw new Error(
-          data?.detail || data?.message || "No se pudo iniciar la actualización."
-        );
-      }
-
-      const pollStatus = async () => {
-        let done = false;
-
-        while (!done) {
-          const statusRes = await fetch(
-            `${apiBase}/publications/without-compatibilities/refresh-status`,
-            {
-              method: "GET",
-              credentials: "include",
-            }
-          );
-
-          const statusData = await statusRes.json().catch(() => ({}));
-
-          if (!statusRes.ok) {
-            throw new Error(
-              statusData?.detail ||
-                statusData?.message ||
-                "No se pudo consultar el estado de actualización."
-            );
-          }
-
-          if (statusData?.in_progress) {
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-            continue;
-          }
-
-          if (statusData?.error) {
-            throw new Error(statusData.error);
-          }
-
-          done = true;
-        }
-      };
-
-      await pollStatus();
-      setRefreshMessage("Índice actualizado correctamente.");
-      setCurrentPage(1);
-
-      setTimeout(() => {
-        setRefreshMessage("");
-      }, 2500);
-    } catch (err) {
-      setRefreshMessage(
-        err?.message || "Ocurrió un error al actualizar los resultados."
-      );
-    } finally {
-      setRefreshing(false);
-    }
   };
 
   const handleExportToExcel = async () => {
@@ -281,21 +206,12 @@ function PublicationsWithoutCompatibilityModal({ open, onClose, apiBase }) {
           />
         </div>
 
-        <div className="publications-actions">
-          <button
-            type="button"
-            className="refresh-results-button"
-            onClick={handleRefreshResults}
-            disabled={refreshing || exporting}
-          >
-            {refreshing ? "Actualizando..." : "Actualizar resultados"}
-          </button>
-
+        <div className="publications-actions left-aligned">
           <button
             type="button"
             className="refresh-results-button export-results-button"
             onClick={handleExportToExcel}
-            disabled={loading || exporting || refreshing || total === 0}
+            disabled={loading || exporting || total === 0}
           >
             {exporting ? "Exportando..." : "Exportar a Excel"}
           </button>
@@ -312,12 +228,6 @@ function PublicationsWithoutCompatibilityModal({ open, onClose, apiBase }) {
                 <div className="publications-count">
                   Total encontrados: {total}
                 </div>
-
-                {refreshMessage && (
-                  <div className="publications-refresh-message">
-                    {refreshMessage}
-                  </div>
-                )}
               </div>
 
               <div className="publications-table-scroll">

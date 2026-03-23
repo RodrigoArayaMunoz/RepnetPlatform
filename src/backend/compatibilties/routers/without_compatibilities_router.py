@@ -24,7 +24,8 @@ async def without_compatibilities_details(
                 detail="No hay cuenta de Mercado Libre conectada",
         )
 
-        access_token = await ml_client.get_access_token_for_user(user_id)
+        access_token = await ml_client.get_valid_token(user_id)
+        
 
         return await get_without_compatibilities_with_titles(
             db_session=db_session,

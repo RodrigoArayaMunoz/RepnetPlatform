@@ -265,3 +265,9 @@
   color: #dc2626; /* rojo */
   line-height: 1.4;
 }
+
+.publications-actions.left-aligned {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+}
