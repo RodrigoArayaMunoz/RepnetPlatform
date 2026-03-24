@@ -9,10 +9,6 @@ function safeText(value, fallback = "") {
   return text || fallback;
 }
 
-function normalizeText(value) {
-  return safeText(value, "").toLowerCase();
-}
-
 function flattenResults(results = []) {
   const rows = [];
 
@@ -30,10 +26,19 @@ function flattenResults(results = []) {
       safeText(group.error_message, "") ||
       "Sin detalle";
 
+    const sourceRowIndex =
+      group.original_row_index ??
+      group.source_row_index ??
+      group.row_index ??
+      groupIndex;
+
     if (Array.isArray(group.results) && group.results.length > 0) {
       group.results.forEach((detail, detailIndex) => {
         rows.push({
-          raw_key: `${itemId}-${detail.year ?? group.year ?? "na"}-${detailIndex}`,
+          key: `${itemId}-${sourceRowIndex}-${detailIndex}`,
+          raw_key: `${itemId}-${sourceRowIndex}-${detailIndex}`,
+          source_row_index: sourceRowIndex,
+          original_row_index: sourceRowIndex,
           item_id: itemId,
           brand_name: safeText(detail.brand_name, brandName),
           model_name: safeText(detail.model_name, modelName),
@@ -58,11 +63,15 @@ function flattenResults(results = []) {
           error_code: safeText(detail.error_code, safeText(group.error_code, "")),
           category_id: categoryId,
           user_product_id: userProductId,
+          row_number: sourceRowIndex + 1,
         });
       });
     } else {
       rows.push({
-        raw_key: `${itemId}-empty`,
+        key: `${itemId}-${sourceRowIndex}-empty`,
+        raw_key: `${itemId}-${sourceRowIndex}-empty`,
+        source_row_index: sourceRowIndex,
+        original_row_index: sourceRowIndex,
         item_id: itemId,
         brand_name: brandName,
         model_name: modelName,
@@ -80,63 +89,12 @@ function flattenResults(results = []) {
         error_code: safeText(group.error_code, ""),
         category_id: categoryId,
         user_product_id: userProductId,
+        row_number: sourceRowIndex + 1,
       });
     }
   });
 
   return rows;
-}
-
-function buildUniqueCompatKey(row) {
-  if (row.ok && row.product_id) {
-    return `ok::${normalizeText(row.item_id)}::${normalizeText(row.product_id)}`;
-  }
-
-  return [
-    "error",
-    normalizeText(row.item_id),
-    normalizeText(row.brand_name),
-    normalizeText(row.model_name),
-    normalizeText(row.version_name),
-    normalizeText(String(row.year)),
-    normalizeText(row.engine_name),
-    normalizeText(row.transmission_name),
-    normalizeText(row.error_code || row.reason),
-  ].join("::");
-}
-
-function dedupeCompatRows(rows = []) {
-  const map = new Map();
-
-  rows.forEach((row, index) => {
-    const uniqueKey = buildUniqueCompatKey(row);
-
-    if (!map.has(uniqueKey)) {
-      map.set(uniqueKey, {
-        ...row,
-        key: uniqueKey,
-        duplicate_count: 1,
-        source_rows: [index + 1],
-      });
-      return;
-    }
-
-    const existing = map.get(uniqueKey);
-    existing.duplicate_count += 1;
-    existing.source_rows.push(index + 1);
-
-    if (!existing.product_id && row.product_id) {
-      existing.product_id = row.product_id;
-    }
-    if (!existing.reason && row.reason) {
-      existing.reason = row.reason;
-    }
-    if (!existing.error_code && row.error_code) {
-      existing.error_code = row.error_code;
-    }
-  });
-
-  return Array.from(map.values());
 }
 
 function groupRows(rows) {
@@ -201,13 +159,21 @@ function groupRows(rows) {
     ...brand,
     models: Array.from(brand.models.values()).map((model) => ({
       ...model,
-      items: Array.from(model.items.values()),
+      items: Array.from(model.items.values()).map((item) => ({
+        ...item,
+        rows: [...item.rows].sort((a, b) => {
+          const aIndex = a.original_row_index ?? 0;
+          const bIndex = b.original_row_index ?? 0;
+          return aIndex - bIndex;
+        }),
+      })),
     })),
   }));
 }
 
 function downloadCsv(rows) {
   const headers = [
+    "Fila Excel",
     "Marca",
     "Modelo",
     "Versión",
@@ -219,7 +185,8 @@ function downloadCsv(rows) {
     "Código Error",
     "Motor",
     "Transmisión",
-    "Filas agrupadas",
+    "Category ID",
+    "User Product ID",
   ];
 
   const escape = (value) => {
@@ -231,6 +198,7 @@ function downloadCsv(rows) {
     headers.join(","),
     ...rows.map((row) =>
       [
+        escape(row.row_number),
         escape(row.brand_name),
         escape(row.model_name),
         escape(row.version_name),
@@ -242,7 +210,8 @@ function downloadCsv(rows) {
         escape(row.error_code),
         escape(row.engine_name),
         escape(row.transmission_name),
-        escape(row.duplicate_count ?? 1),
+        escape(row.category_id),
+        escape(row.user_product_id),
       ].join(",")
     ),
   ].join("\n");
@@ -266,6 +235,10 @@ function YearStatusRow({ row }) {
       </div>
 
       <div className="rm-year-body">
+        <div>
+          <strong>Fila Excel:</strong> {row.row_number}
+        </div>
+
         <div>
           <strong>Año:</strong> {row.year}
         </div>
@@ -292,12 +265,6 @@ function YearStatusRow({ row }) {
             ) : null}
           </>
         )}
-
-        {(row.duplicate_count ?? 1) > 1 ? (
-          <div>
-            <strong>Filas agrupadas:</strong> {row.duplicate_count}
-          </div>
-        ) : null}
       </div>
     </div>
   );
@@ -310,6 +277,10 @@ function ItemBlock({ item, onlyErrors }) {
   const filteredRows = useMemo(() => {
     return onlyErrors ? item.rows.filter((r) => !r.ok) : item.rows;
   }, [item.rows, onlyErrors]);
+
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [onlyErrors, item.rows]);
 
   if (filteredRows.length === 0) return null;
 
@@ -433,7 +404,7 @@ function BrandBlock({ brand, onlyErrors }) {
         <div className="rm-collapse-left">
           <span className="rm-collapse-title">{brand.brand_name}</span>
           <span className="rm-collapse-meta">
-            {brand.total} compatibilidades únicas
+            {brand.total} registro(s)
           </span>
         </div>
 
@@ -466,19 +437,18 @@ export default function ResultModal({ open, onClose, summary, results }) {
 
   useEffect(() => {
     if (open) {
-      setStatusFilter("ok");
+      setStatusFilter("all");
       setOnlyErrors(false);
       setSearch("");
     }
   }, [open]);
 
-  const rawRows = useMemo(() => flattenResults(results || []), [results]);
-  const compatRows = useMemo(() => dedupeCompatRows(rawRows), [rawRows]);
+  const rows = useMemo(() => flattenResults(results || []), [results]);
 
   const filteredRows = useMemo(() => {
     const term = search.trim().toLowerCase();
 
-    return compatRows.filter((row) => {
+    return rows.filter((row) => {
       const matchesOnlyErrors = onlyErrors ? !row.ok : true;
 
       const matchesStatus =
@@ -497,6 +467,7 @@ export default function ResultModal({ open, onClose, summary, results }) {
         row.product_id,
         row.reason,
         row.error_code,
+        row.row_number,
       ]
         .join(" ")
         .toLowerCase();
@@ -505,23 +476,23 @@ export default function ResultModal({ open, onClose, summary, results }) {
 
       return matchesOnlyErrors && matchesStatus && matchesSearch;
     });
-  }, [compatRows, onlyErrors, statusFilter, search]);
+  }, [rows, onlyErrors, statusFilter, search]);
 
   const grouped = useMemo(() => groupRows(filteredRows), [filteredRows]);
 
   const computedSummary = useMemo(() => {
-    const total = compatRows.length;
-    const ok = compatRows.filter((r) => r.ok).length;
-    const error = compatRows.filter((r) => !r.ok).length;
+    const total = rows.length;
+    const ok = rows.filter((r) => r.ok).length;
+    const error = rows.filter((r) => !r.ok).length;
 
     const brands = new Set(
-      compatRows
+      rows
         .map((r) => safeText(r.brand_name, "").toLowerCase())
         .filter(Boolean)
     ).size;
 
     const models = new Set(
-      compatRows
+      rows
         .map((r) =>
           `${safeText(r.brand_name, "").toLowerCase()}__${safeText(
             r.model_name,
@@ -532,7 +503,7 @@ export default function ResultModal({ open, onClose, summary, results }) {
     ).size;
 
     return { total, ok, error, brands, models };
-  }, [compatRows]);
+  }, [rows]);
 
   if (!open) return null;
 
@@ -540,11 +511,14 @@ export default function ResultModal({ open, onClose, summary, results }) {
     summary?.processed_rows ??
     summary?.total_rows ??
     summary?.processed ??
-    rawRows.length;
+    rows.length;
 
-  const totalCompatibilities = computedSummary.total;
-  const compatibilitiesOk = computedSummary.ok;
-  const compatibilitiesError = computedSummary.error;
+  const totalCompatibilities =
+    summary?.compatibilities_total ?? computedSummary.total;
+  const compatibilitiesOk =
+    summary?.compatibilities_ok ?? computedSummary.ok;
+  const compatibilitiesError =
+    summary?.compatibilities_error ?? computedSummary.error;
   const brandsCount = computedSummary.brands;
   const modelsCount = computedSummary.models;
 
@@ -648,7 +622,7 @@ export default function ResultModal({ open, onClose, summary, results }) {
           </div>
 
           <div className="rm-results-meta">
-            Mostrando {filteredRows.length} compatibilidad(es) única(s)
+            Mostrando {filteredRows.length} registro(s)
             {search ? ` para "${search}"` : ""}
             {statusFilter === "ok" ? " · solo OK" : ""}
             {statusFilter === "error" ? " · solo errores" : ""}

@@ -1,9 +1,8 @@
 import asyncio
 import random
 import time
-from services.redis_rate_limiter import RedisWindowRateLimiter
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, TypeAlias
 
 from fastapi import HTTPException
 
@@ -20,7 +19,7 @@ from services.excel_service import (
 )
 from services.job_store import JobStore
 from services.ml_client import ml_client
-from typing import Any, Awaitable, Callable, TypeAlias
+from services.redis_rate_limiter import RedisWindowRateLimiter
 
 
 @dataclass
@@ -28,7 +27,7 @@ class JobCaches:
     item_detail: dict[str, dict] = field(default_factory=dict)
     product: dict[
         tuple[str | None, str | None, str | None, str | None, str | None, str | None],
-        str | None
+        str | None,
     ] = field(default_factory=dict)
 
 
@@ -56,24 +55,9 @@ class JobMetrics:
         }
 
 
-class SimpleRateLimiter:
-    def __init__(self, requests_per_second: float):
-        self.requests_per_second = max(requests_per_second, 0.1)
-        self.min_interval = 1.0 / self.requests_per_second
-        self._lock = asyncio.Lock()
-        self._last_ts = 0.0
-
-    async def acquire(self) -> None:
-        async with self._lock:
-            now = time.monotonic()
-            wait_time = self.min_interval - (now - self._last_ts)
-            if wait_time > 0:
-                await asyncio.sleep(wait_time)
-            self._last_ts = time.monotonic()
-
-
 def _settings_value(name: str, default: Any) -> Any:
     return getattr(settings, name, default)
+
 
 DEBUG_COMPAT = False
 
@@ -87,12 +71,6 @@ def dsep(title: str = ""):
     if DEBUG_COMPAT:
         line = "=" * 25
         print(f"\n{line} {title} {line}", flush=True)
-
-
-def safe_str(value):
-    if value is None:
-        return "None"
-    return str(value)
 
 
 READ_RATE_LIMITER = RedisWindowRateLimiter(
@@ -110,6 +88,8 @@ WRITE_RATE_LIMITER = RedisWindowRateLimiter(
 RETRY_ATTEMPTS = int(_settings_value("ml_retry_attempts", 4))
 RETRY_BASE_DELAY = float(_settings_value("ml_retry_base_delay", 1.0))
 PROGRESS_UPDATE_EVERY = int(_settings_value("job_progress_update_every", 25))
+
+ProgressCallback: TypeAlias = Callable[[int], Awaitable[None]]
 
 
 def _is_retryable_http_exception(exc: HTTPException) -> bool:
@@ -145,7 +125,6 @@ async def call_ml(
 
             metrics.ml_retries += 1
 
-            # En 429 conviene esperar más
             if getattr(exc, "status_code", None) == 429:
                 delay = max(2.0, RETRY_BASE_DELAY * (2 ** attempt)) + random.uniform(0, 0.5)
             else:
@@ -166,12 +145,15 @@ async def call_ml(
 
     if last_exc:
         raise last_exc
+
     raise RuntimeError("call_ml terminó sin respuesta ni excepción")
+
 
 def _cache_get(cache: dict, key: Any, metrics: JobMetrics) -> Any:
     if key in cache:
         metrics.cache_hits += 1
         return cache[key]
+
     metrics.cache_misses += 1
     return None
 
@@ -231,7 +213,11 @@ async def get_item_detail_cached(
     return data
 
 
-def dedup_key(row: dict) -> tuple:
+def build_row_identity_key(row: dict) -> tuple:
+    """
+    Identidad lógica de una fila del Excel.
+    Se deja disponible solo para trazabilidad/reporting, no para deduplicar el write.
+    """
     item_id = extract_item_id(get_row_value(row, "ASOCIACION ML"))
     brand_name = normalize_for_compare(get_row_value(row, "MARCA"))
     model_name = normalize_for_compare(get_row_value(row, "MODELO"))
@@ -249,31 +235,6 @@ def dedup_key(row: dict) -> tuple:
         transmission_name,
         year,
     )
-
-
-def build_unique_rows_plan(rows: list[dict]) -> tuple[list[dict], list[list[int]]]:
-    unique_key_to_index: dict[tuple, int] = {}
-    unique_entries: list[dict] = []
-    original_indices_by_unique_index: list[list[int]] = []
-
-    for original_idx, row in enumerate(rows):
-        key = dedup_key(row)
-        unique_index = unique_key_to_index.get(key)
-
-        if unique_index is None:
-            unique_index = len(unique_entries)
-            unique_key_to_index[key] = unique_index
-            unique_entries.append(
-                {
-                    "unique_index": unique_index,
-                    "row": row,
-                }
-            )
-            original_indices_by_unique_index.append([])
-
-        original_indices_by_unique_index[unique_index].append(original_idx)
-
-    return unique_entries, original_indices_by_unique_index
 
 
 def build_results_summary(
@@ -335,103 +296,7 @@ def build_results_summary(
         "metrics": metrics_payload,
     }
 
-ProgressCallback: TypeAlias = Callable[[int], Awaitable[None]]
 
-async def process_unique_rows_chunk(
-    access_token: str,
-    unique_entries: list[dict],
-    catalog_cache: CatalogPreloadService,
-    on_progress: Callable[[int], Awaitable[None]] | None = None,
-) -> dict:
-    caches = JobCaches()
-    metrics = JobMetrics()
-
-    max_concurrency = max(1, int(_settings_value("max_row_concurrency", 2)))
-    progress_every = max(1, int(_settings_value("chunk_progress_update_every", 25)))
-
-    semaphore = asyncio.Semaphore(max_concurrency)
-    progress_lock = asyncio.Lock()
-
-    total_entries = len(unique_entries)
-    row_results: list[dict | None] = [None] * total_entries
-    completed = 0
-
-    if total_entries == 0:
-        summary = build_results_summary(
-            [],
-            total_rows=0,
-            total_unique_rows=0,
-            duplicated_rows=0,
-            metrics=metrics,
-        )
-        summary["processed_unique_rows"] = 0
-        return {
-            "results": [],
-            "summary": summary,
-        }
-
-    async def worker(pos: int, entry: dict):
-        nonlocal completed
-
-        async with semaphore:
-            result = await process_vehicle_row(
-                access_token=access_token,
-                row=entry["row"],
-                catalog_cache=catalog_cache,
-                caches=caches,
-                metrics=metrics,
-            )
-
-            result["unique_index"] = entry["unique_index"]
-            row_results[pos] = result
-
-            should_report = False
-            completed_snapshot = 0
-
-            async with progress_lock:
-                completed += 1
-                completed_snapshot = completed
-                should_report = (
-                    on_progress is not None
-                    and (
-                        completed_snapshot % progress_every == 0
-                        or completed_snapshot == total_entries
-                    )
-                )
-
-            if should_report and on_progress is not None:
-                try:
-                    await on_progress(completed_snapshot)
-                except Exception:
-                    # El progreso no debe botar el chunk completo
-                    pass
-
-    await asyncio.gather(*(worker(i, entry) for i, entry in enumerate(unique_entries)))
-
-    final_results = [
-        r if r is not None else {
-            "ok": False,
-            "reason": "Resultado faltante",
-            "error_type": "technical",
-            "error_code": "MISSING_RESULT",
-            "results": [],
-        }
-        for r in row_results
-    ]
-
-    summary = build_results_summary(
-        final_results,
-        total_rows=total_entries,
-        total_unique_rows=total_entries,
-        duplicated_rows=0,
-        metrics=metrics,
-    )
-    summary["processed_unique_rows"] = total_entries
-
-    return {
-        "results": final_results,
-        "summary": summary,
-    }
 def _build_error_result(
     item_id: str | None,
     reason: str,
@@ -482,7 +347,6 @@ def _build_error_result(
     }
 
 
-
 async def process_vehicle_row(
     access_token: str,
     row: dict,
@@ -490,7 +354,6 @@ async def process_vehicle_row(
     caches: JobCaches,
     metrics: JobMetrics,
 ) -> dict:
-    
     item_id = extract_item_id(get_row_value(row, "ASOCIACION ML"))
     brand_name = normalize_text(get_row_value(row, "MARCA"))
     model_name = normalize_text(get_row_value(row, "MODELO"))
@@ -498,8 +361,6 @@ async def process_vehicle_row(
     engine_name = normalize_engine(get_row_value(row, "CILINDRADA"))
     transmission_name = normalize_transmission(get_row_value(row, "TRANSMISION"))
     year = parse_year_value(get_row_value(row, "AÑO"))
-
-
 
     if not item_id:
         return _build_error_result(
@@ -557,7 +418,7 @@ async def process_vehicle_row(
                 year=year,
                 error_code="MISSING_USER_PRODUCT_ID",
             )
-        
+
         dsep("ITEM DETAIL")
         dlog("item_id         :", item_id)
         dlog("category_id     :", category_id)
@@ -652,18 +513,17 @@ async def process_vehicle_row(
                 year=year,
                 error_code="TRANSMISSION_NOT_FOUND",
             )
-        
 
         product_id = await search_vehicle_product_id(
-            access_token,
-            brand_id,
-            model_id,
-            year_id,
-            version_id,
-            transmission_id,
-            engine_id,
-            caches,
-            metrics,
+            access_token=access_token,
+            brand_id=brand_id,
+            model_id=model_id,
+            year_id=year_id,
+            version_id=version_id,
+            transmission_id=transmission_id,
+            engine_id=engine_id,
+            caches=caches,
+            metrics=metrics,
         )
 
         if not product_id:
@@ -708,6 +568,7 @@ async def process_vehicle_row(
 
         dsep("ML RESPONSE")
         dlog("ml_response:", ml_response)
+
         return {
             "ok": True,
             "item_id": item_id,
@@ -760,16 +621,123 @@ async def process_vehicle_row(
         )
 
 
+async def process_rows_chunk(
+    access_token: str,
+    rows: list[dict],
+    catalog_cache: CatalogPreloadService,
+    on_progress: ProgressCallback | None = None,
+) -> dict:
+    """
+    Procesa un conjunto de filas como registros independientes.
+    No deduplica antes del write.
+    """
+    caches = JobCaches()
+    metrics = JobMetrics()
+
+    max_concurrency = max(1, int(_settings_value("max_row_concurrency", 2)))
+    progress_every = max(1, int(_settings_value("chunk_progress_update_every", 25)))
+
+    semaphore = asyncio.Semaphore(max_concurrency)
+    progress_lock = asyncio.Lock()
+
+    total_rows = len(rows)
+    row_results: list[dict | None] = [None] * total_rows
+    completed = 0
+
+    if total_rows == 0:
+        summary = build_results_summary(
+            [],
+            total_rows=0,
+            total_unique_rows=0,
+            duplicated_rows=0,
+            metrics=metrics,
+        )
+        summary["processed_unique_rows"] = 0
+        return {
+            "results": [],
+            "summary": summary,
+        }
+
+    async def worker(pos: int, row: dict):
+        nonlocal completed
+
+        async with semaphore:
+            result = await process_vehicle_row(
+                access_token=access_token,
+                row=row,
+                catalog_cache=catalog_cache,
+                caches=caches,
+                metrics=metrics,
+            )
+
+            result["source_row_index"] = pos
+            result["original_row_index"] = pos
+            result["was_duplicated"] = False
+            row_results[pos] = result
+
+            should_report = False
+            completed_snapshot = 0
+
+            async with progress_lock:
+                completed += 1
+                completed_snapshot = completed
+                should_report = (
+                    on_progress is not None
+                    and (
+                        completed_snapshot % progress_every == 0
+                        or completed_snapshot == total_rows
+                    )
+                )
+
+            if should_report and on_progress is not None:
+                try:
+                    await on_progress(completed_snapshot)
+                except Exception:
+                    pass
+
+    await asyncio.gather(*(worker(i, row) for i, row in enumerate(rows)))
+
+    final_results = [
+        r
+        if r is not None
+        else {
+            "ok": False,
+            "reason": "Resultado faltante",
+            "error_type": "technical",
+            "error_code": "MISSING_RESULT",
+            "results": [],
+        }
+        for r in row_results
+    ]
+
+    summary = build_results_summary(
+        final_results,
+        total_rows=total_rows,
+        total_unique_rows=total_rows,
+        duplicated_rows=0,
+        metrics=metrics,
+    )
+    summary["processed_unique_rows"] = total_rows
+
+    return {
+        "results": final_results,
+        "summary": summary,
+    }
+
+
 async def process_rows_for_job(
-    
     job_id: str,
     access_token: str,
     rows: list[dict],
 ) -> dict:
+    """
+    Procesa todas las filas del Excel como registros independientes.
+    Regla de negocio: cada fila del Excel se intenta grabar aunque repita
+    los mismos datos de compatibilidad que otra fila.
+    """
     caches = JobCaches()
     metrics = JobMetrics()
     catalog_cache = CatalogPreloadService(call_ml=call_ml, metrics=metrics)
-  
 
     JobStore.update(
         job_id,
@@ -789,136 +757,85 @@ async def process_rows_for_job(
         },
     )
 
-    semaphore = asyncio.Semaphore(int(_settings_value("max_row_concurrency", 3)))
-    progress_lock = asyncio.Lock()
-
-    unique_map: dict[tuple, list[int]] = {}
-    unique_rows: list[dict] = []
-
-    for idx, row in enumerate(rows):
-        key = dedup_key(row)
-        if key not in unique_map:
-            unique_map[key] = []
-            unique_rows.append(row)
-        unique_map[key].append(idx)
-
     total_rows = len(rows)
-    total_unique_rows = len(unique_rows)
-    duplicated_rows = total_rows - total_unique_rows
 
-    if total_unique_rows == 0:
+    if total_rows == 0:
+        empty_summary = build_results_summary(
+            [],
+            total_rows=0,
+            total_unique_rows=0,
+            duplicated_rows=0,
+            metrics=metrics,
+        )
+
         JobStore.update(
             job_id,
             progress=95,
-            message="No hay filas válidas para procesar",
+            message="No hay filas para procesar",
             metrics=metrics.to_dict(),
         )
+
         return {
             "results": [],
-            "summary": {
-                "processed_rows": 0,
-                "unique_rows": 0,
-                "duplicated_rows": 0,
-                "success_count": 0,
-                "error_count": 0,
-                "functional_errors": 0,
-                "technical_errors": 0,
-                "compatibilities_total": 0,
-                "compatibilities_ok": 0,
-                "compatibilities_error": 0,
-                "metrics": metrics.to_dict(),
-            },
+            "summary": empty_summary,
         }
 
+    semaphore = asyncio.Semaphore(max(1, int(_settings_value("max_row_concurrency", 3))))
+    progress_lock = asyncio.Lock()
+
     completed = 0
-    row_results_unique: list[dict | None] = [None] * total_unique_rows
+    row_results: list[dict | None] = [None] * total_rows
 
     async def worker(pos: int, row: dict):
         nonlocal completed
 
         async with semaphore:
             result = await process_vehicle_row(
-                access_token,
-                row,
-                catalog_cache,
-                caches,
-                metrics,
+                access_token=access_token,
+                row=row,
+                catalog_cache=catalog_cache,
+                caches=caches,
+                metrics=metrics,
             )
-            row_results_unique[pos] = result
+
+            result["source_row_index"] = pos
+            result["original_row_index"] = pos
+            result["was_duplicated"] = False
+            row_results[pos] = result
 
             async with progress_lock:
                 completed += 1
-                if completed % PROGRESS_UPDATE_EVERY == 0 or completed == total_unique_rows:
-                    progress = 10 + int((completed / total_unique_rows) * 85)
+                if completed % PROGRESS_UPDATE_EVERY == 0 or completed == total_rows:
+                    progress = 10 + int((completed / total_rows) * 85)
                     JobStore.update(
                         job_id,
                         progress=progress,
                         processed_rows=completed,
-                        message=f"Procesadas {completed}/{total_unique_rows} filas únicas",
+                        message=f"Procesadas {completed}/{total_rows} filas",
                     )
 
-    await asyncio.gather(*(worker(i, row) for i, row in enumerate(unique_rows)))
-
-    final_results: list[dict] = [None] * total_rows  # type: ignore
-
-    for unique_pos, row in enumerate(unique_rows):
-        key = dedup_key(row)
-        result = row_results_unique[unique_pos] or {
-            "ok": False,
-            "reason": "La fila no devolvió resultado",
-            "error_type": "technical",
-            "error_code": "MISSING_RESULT",
-            "results": [],
-        }
-
-        for original_idx in unique_map[key]:
-            copied_result = dict(result)
-            copied_result["source_row_index"] = unique_pos
-            copied_result["original_row_index"] = original_idx
-            copied_result["was_duplicated"] = len(unique_map[key]) > 1
-            final_results[original_idx] = copied_result
+    await asyncio.gather(*(worker(i, row) for i, row in enumerate(rows)))
 
     final_results = [
-        r if r is not None else {
+        r
+        if r is not None
+        else {
             "ok": False,
             "reason": "Resultado faltante",
             "error_type": "technical",
             "error_code": "MISSING_FINAL_RESULT",
             "results": [],
         }
-        for r in final_results
+        for r in row_results
     ]
 
-    rows_ok = sum(1 for r in final_results if r.get("ok"))
-    rows_error = len(final_results) - rows_ok
-
-    compat_total = 0
-    compat_ok = 0
-    compat_error = 0
-    functional_errors = 0
-    technical_errors = 0
-
-    for r in final_results:
-        if r.get("error_type") == "functional":
-            functional_errors += 1
-        elif r.get("error_type") == "technical":
-            technical_errors += 1
-
-        details = r.get("results", [])
-        if not isinstance(details, list):
-            details = []
-
-        if details:
-            compat_total += len(details)
-            compat_ok += sum(1 for d in details if d.get("ok"))
-            compat_error += sum(1 for d in details if not d.get("ok"))
-        else:
-            if r.get("ok") is True:
-                compat_total += 1
-                compat_ok += 1
-            elif r.get("ok") is False:
-                compat_total += 1
-                compat_error += 1
+    summary = build_results_summary(
+        final_results,
+        total_rows=total_rows,
+        total_unique_rows=total_rows,
+        duplicated_rows=0,
+        metrics=metrics,
+    )
 
     JobStore.update(
         job_id,
@@ -929,17 +846,5 @@ async def process_rows_for_job(
 
     return {
         "results": final_results,
-        "summary": {
-            "processed_rows": total_rows,
-            "unique_rows": total_unique_rows,
-            "duplicated_rows": duplicated_rows,
-            "success_count": rows_ok,
-            "error_count": rows_error,
-            "functional_errors": functional_errors,
-            "technical_errors": technical_errors,
-            "compatibilities_total": compat_total,
-            "compatibilities_ok": compat_ok,
-            "compatibilities_error": compat_error,
-            "metrics": metrics.to_dict(),
-        },
+        "summary": summary,
     }

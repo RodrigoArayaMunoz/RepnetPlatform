@@ -56,24 +56,107 @@ async def get_item_compact_cached(
     return compact
 
 
-def build_grouped_product_ids(rows: list[dict]) -> dict[str, list[str]]:
-    grouped: dict[str, set[str]] = defaultdict(set)
+async def post_compatibility_row(
+    *,
+    access_token: str,
+    user_id: int | str,
+    row: dict,
+    metrics: JobMetrics,
+) -> dict:
+    item_id = str(row.get("item_id") or "")
+    product_id = str(row.get("product_id") or "")
 
-    for row in rows:
-        item_id = row.get("item_id")
-        product_id = row.get("product_id")
-        ok = row.get("ok")
+    if not row.get("ok") or not item_id or not product_id:
+        return {
+            "ok": False,
+            "item_id": item_id,
+            "product_id": product_id,
+            "excel_row_index": row.get("excel_row_index"),
+            "error_code": "MISSING_ITEM_DATA",
+            "error_message": "No se obtuvo category_id o user_product_id",
+            "response": None,
+        }
 
-        if not item_id or not product_id or not ok:
-            continue
+    item_compact = await get_item_compact_cached(
+        access_token=access_token,
+        user_id=user_id,
+        item_id=item_id,
+        metrics=metrics,
+    )
 
-        grouped[str(item_id)].add(str(product_id))
+    category_id = item_compact.get("category_id")
+    user_product_id = item_compact.get("user_product_id")
+
+    if not category_id or not user_product_id:
+        logger.error(
+            "[ROW_POST][ERROR] item_id=%s sin category_id o user_product_id",
+            item_id,
+        )
+        return {
+            "ok": False,
+            "item_id": item_id,
+            "product_id": product_id,
+            "excel_row_index": row.get("excel_row_index"),
+            "error_code": "MISSING_ITEM_DATA",
+            "error_message": "No se obtuvo category_id o user_product_id",
+            "response": None,
+        }
+
+    logger.info(
+        "[ROW_POST][POST] excel_row=%s item_id=%s user_product_id=%s product_id=%s",
+        row.get("excel_row_index"),
+        item_id,
+        user_product_id,
+        product_id,
+    )
+
+    response = await call_ml(
+        ml_client.add_user_product_compatibility,
+        access_token=access_token,
+        user_product_id=str(user_product_id),
+        category_id=str(category_id),
+        product_id=str(product_id),
+        creation_source="DEFAULT",
+        user_id=user_id,
+        metrics=metrics,
+        limiter=WRITE_RATE_LIMITER,
+    )
+
+    logger.info(
+        "[ROW_POST][OK] excel_row=%s item_id=%s user_product_id=%s product_id=%s",
+        row.get("excel_row_index"),
+        item_id,
+        user_product_id,
+        product_id,
+    )
 
     return {
-        item_id: sorted(list(product_ids))
-        for item_id, product_ids in grouped.items()
+        "ok": True,
+        "item_id": item_id,
+        "product_id": product_id,
+        "excel_row_index": row.get("excel_row_index"),
+        "user_product_id": str(user_product_id),
+        "category_id": str(category_id),
+        "response": response,
     }
 
+#def build_grouped_product_ids(rows: list[dict]) -> dict[str, list[str]]:
+    #grouped: dict[str, set[str]] = defaultdict(set)
+
+    #for row in rows:
+        #item_id = row.get("item_id")
+        #product_id = row.get("product_id")
+        #ok = row.get("ok")
+
+        #if not item_id or not product_id or not ok:
+            #continue
+
+        #grouped[str(item_id)].add(str(product_id))
+
+    #return {
+        #item_id: sorted(list(product_ids))
+        #for item_id, product_ids in grouped.items()
+    #}
 
 async def post_compatibilities_batch(
     *,
@@ -149,30 +232,22 @@ async def post_compatibilities_batch(
 
 def build_final_row_results(
     resolved_rows: list[dict],
-    batch_results: list[dict],
+    post_results: list[dict],
 ) -> list[dict]:
-    ok_pairs: set[tuple[str, str]] = set()
-    error_by_pair: dict[tuple[str, str], dict] = {}
+    result_by_pair_and_row: dict[tuple[str, str, int], dict] = {}
 
-    for batch in batch_results:
-        item_id = str(batch.get("item_id") or "")
-        product_ids = [str(pid) for pid in batch.get("product_ids", [])]
-
-        if batch.get("ok"):
-            for pid in product_ids:
-                ok_pairs.add((item_id, pid))
-        else:
-            for pid in product_ids:
-                error_by_pair[(item_id, pid)] = {
-                    "error_code": batch.get("error_code", "BATCH_ERROR"),
-                    "error_message": batch.get("error_message", "Error en batch"),
-                }
+    for idx, post in enumerate(post_results):
+        item_id = str(post.get("item_id") or "")
+        product_id = str(post.get("product_id") or "")
+        excel_row_index = post.get("excel_row_index", idx)
+        result_by_pair_and_row[(item_id, product_id, excel_row_index)] = post
 
     final_rows: list[dict] = []
 
-    for row in resolved_rows:
+    for idx, row in enumerate(resolved_rows):
         item_id = str(row.get("item_id") or "")
         product_id = str(row.get("product_id") or "")
+        excel_row_index = row.get("excel_row_index", idx)
 
         if not row.get("ok") or not product_id:
             final_rows.append(
@@ -194,9 +269,9 @@ def build_final_row_results(
             )
             continue
 
-        pair = (item_id, product_id)
+        post_result = result_by_pair_and_row.get((item_id, product_id, excel_row_index))
 
-        if pair in ok_pairs:
+        if post_result and post_result.get("ok"):
             final_rows.append(
                 {
                     **row,
@@ -210,18 +285,19 @@ def build_final_row_results(
                             "ok": True,
                             "year": row.get("year"),
                             "product_id": product_id,
+                            "item_id": item_id,
+                            "user_product_id": post_result.get("user_product_id"),
+                            "category_id": post_result.get("category_id"),
+                            "response": post_result.get("response"),
                         }
                     ],
                 }
             )
         else:
-            error_info = error_by_pair.get(
-                pair,
-                {
-                    "error_code": "MISSING_BATCH_CONFIRMATION",
-                    "error_message": "No se encontró confirmación del batch para esta fila",
-                },
-            )
+            error_info = post_result or {
+                "error_code": "MISSING_POST_CONFIRMATION",
+                "error_message": "No se encontró confirmación del POST para esta fila",
+            }
             final_rows.append(
                 {
                     **row,
@@ -234,9 +310,9 @@ def build_final_row_results(
                         {
                             "ok": False,
                             "year": row.get("year"),
-                            "reason": error_info["error_message"],
+                            "reason": error_info.get("error_message"),
                             "error_type": "technical",
-                            "error_code": error_info["error_code"],
+                            "error_code": error_info.get("error_code"),
                             "product_id": product_id,
                         }
                     ],
@@ -244,7 +320,6 @@ def build_final_row_results(
             )
 
     return final_rows
-
 
 def build_unique_compatibility_key(row: dict) -> str:
     item_id = _norm(row.get("item_id"))
@@ -285,18 +360,15 @@ def dedupe_final_rows(final_rows: list[dict]) -> list[dict]:
     return list(deduped.values())
 
 
-def build_compat_summary(final_rows: list[dict], batch_results: list[dict], metrics: JobMetrics) -> dict:
-    deduped_rows = dedupe_final_rows(final_rows)
-
+def build_compat_summary(final_rows: list[dict], post_results: list[dict], metrics: JobMetrics) -> dict:
     processed_rows = len(final_rows)
-    unique_compatibilities = len(deduped_rows)
-    compat_ok = sum(1 for r in deduped_rows if r.get("ok"))
-    compat_error = unique_compatibilities - compat_ok
+    rows_ok = sum(1 for r in final_rows if r.get("ok"))
+    rows_error = processed_rows - rows_ok
 
     brands = len(
         {
             _norm(r.get("brand_name"))
-            for r in deduped_rows
+            for r in final_rows
             if _safe_text(r.get("brand_name"))
         }
     )
@@ -304,33 +376,31 @@ def build_compat_summary(final_rows: list[dict], batch_results: list[dict], metr
     models = len(
         {
             f"{_norm(r.get('brand_name'))}::{_norm(r.get('model_name'))}"
-            for r in deduped_rows
+            for r in final_rows
             if _safe_text(r.get("model_name"))
         }
     )
 
-    functional_errors = sum(1 for r in deduped_rows if r.get("error_type") == "functional")
-    technical_errors = sum(1 for r in deduped_rows if r.get("error_type") == "technical")
+    functional_errors = sum(1 for r in final_rows if r.get("error_type") == "functional")
+    technical_errors = sum(1 for r in final_rows if r.get("error_type") == "technical")
 
     return {
         "processed_rows": processed_rows,
         "total_rows": processed_rows,
         "excel_rows_processed": processed_rows,
-        "unique_compatibilities": unique_compatibilities,
-        "success_count": compat_ok,
-        "error_count": compat_error,
-        "compatibilities_total": unique_compatibilities,
-        "compatibilities_ok": compat_ok,
-        "compatibilities_error": compat_error,
+        "success_count": rows_ok,
+        "error_count": rows_error,
+        "compatibilities_total": processed_rows,
+        "compatibilities_ok": rows_ok,
+        "compatibilities_error": rows_error,
         "functional_errors": functional_errors,
         "technical_errors": technical_errors,
         "brands": brands,
         "models": models,
-        "items_count": len({str(r.get("item_id") or "") for r in deduped_rows if r.get("item_id")}),
-        "batches_count": len(batch_results),
+        "items_count": len({str(r.get("item_id") or "") for r in final_rows if r.get("item_id")}),
+        "post_count": len(post_results),
         "metrics": metrics.to_dict(),
     }
-
 
 async def process_compatibility_batches(
     *,
@@ -340,44 +410,36 @@ async def process_compatibility_batches(
     on_progress: Callable[[int, int], Awaitable[None]] | None = None,
 ) -> dict:
     metrics = JobMetrics()
-    grouped = build_grouped_product_ids(rows)
-    batch_size = min(200, max(1, int(getattr(settings, "compat_batch_size", 200))))
     max_concurrency = max(1, int(getattr(settings, "compat_batch_concurrency", 4)))
 
-    all_batches: list[tuple[str, list[str]]] = []
-    total_products = 0
-
-    for item_id, product_ids in grouped.items():
-        total_products += len(product_ids)
-        for batch in chunked(product_ids, batch_size):
-            all_batches.append((item_id, batch))
+    rows_to_process: list[dict] = []
+    for idx, row in enumerate(rows):
+        enriched = dict(row)
+        enriched["excel_row_index"] = row.get("excel_row_index", idx + 2)
+        rows_to_process.append(enriched)
 
     logger.info(
-        "[BATCH][START] items_grouped=%s total_products=%s total_batches=%s batch_size=%s concurrency=%s",
-        len(grouped),
-        total_products,
-        len(all_batches),
-        batch_size,
+        "[ROW_POST][START] excel_rows=%s concurrency=%s",
+        len(rows_to_process),
         max_concurrency,
     )
 
     semaphore = asyncio.Semaphore(max_concurrency)
     progress_lock = asyncio.Lock()
     completed = 0
-    batch_results: list[dict | None] = [None] * len(all_batches)
+    post_results: list[dict | None] = [None] * len(rows_to_process)
 
-    async def worker(pos: int, item_id: str, batch: list[str]) -> None:
+    async def worker(pos: int, row: dict) -> None:
         nonlocal completed
 
         async with semaphore:
-            result = await post_compatibilities_batch(
+            result = await post_compatibility_row(
                 access_token=access_token,
                 user_id=user_id,
-                item_id=item_id,
-                product_ids=batch,
+                row=row,
                 metrics=metrics,
             )
-            batch_results[pos] = result
+            post_results[pos] = result
 
             should_notify = False
             completed_snapshot = 0
@@ -388,48 +450,46 @@ async def process_compatibility_batches(
                 should_notify = on_progress is not None
 
             logger.info(
-                "[BATCH][PROGRESS] completed=%s/%s last_item=%s sent=%s ok=%s",
+                "[ROW_POST][PROGRESS] completed=%s/%s excel_row=%s item_id=%s product_id=%s ok=%s",
                 completed_snapshot,
-                len(all_batches),
-                item_id,
-                len(batch),
+                len(rows_to_process),
+                row.get("excel_row_index"),
+                row.get("item_id"),
+                row.get("product_id"),
                 result.get("ok"),
             )
 
             if should_notify and on_progress is not None:
                 try:
-                    await on_progress(completed_snapshot, len(all_batches))
+                    await on_progress(completed_snapshot, len(rows_to_process))
                 except Exception:
-                    logger.exception("[BATCH][WARN] fallo actualizando progreso")
+                    logger.exception("[ROW_POST][WARN] fallo actualizando progreso")
 
-    await asyncio.gather(
-        *(worker(i, item_id, batch) for i, (item_id, batch) in enumerate(all_batches))
-    )
+    await asyncio.gather(*(worker(i, row) for i, row in enumerate(rows_to_process)))
 
-    final_batch_results = [
+    final_post_results = [
         r if r is not None else {
             "ok": False,
-            "error_code": "MISSING_BATCH_RESULT",
-            "error_message": "Resultado faltante del batch",
+            "error_code": "MISSING_POST_RESULT",
+            "error_message": "Resultado faltante del POST por fila",
             "item_id": "",
-            "product_ids": [],
+            "product_id": "",
         }
-        for r in batch_results
+        for r in post_results
     ]
 
-    final_rows = build_final_row_results(rows, final_batch_results)
-    summary = build_compat_summary(final_rows, final_batch_results, metrics)
+    final_rows = build_final_row_results(rows_to_process, final_post_results)
+    summary = build_compat_summary(final_rows, final_post_results, metrics)
 
     logger.info(
-        "[BATCH][END] excel_rows=%s unique_compatibilities=%s ok=%s error=%s",
+        "[ROW_POST][END] excel_rows=%s ok=%s error=%s",
         summary["processed_rows"],
-        summary["compatibilities_total"],
-        summary["compatibilities_ok"],
-        summary["compatibilities_error"],
+        summary["success_count"],
+        summary["error_count"],
     )
 
     return {
         "results": final_rows,
-        "batch_results": final_batch_results,
+        "post_results": final_post_results,
         "summary": summary,
     }
