@@ -12,9 +12,7 @@ from services.catalog_preload_service import CatalogPreloadService
 from services.compatibility_service import (
     JobMetrics,
     build_results_summary,
-    build_unique_rows_plan,
     call_ml,
-    process_unique_rows_chunk,
 )
 from services.excel_service import load_excel_rows
 from services.job_store import JobStore
