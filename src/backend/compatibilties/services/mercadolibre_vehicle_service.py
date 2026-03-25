@@ -20,7 +20,8 @@ class MercadoLibreVehicleService:
         self.session = requests.Session()
         self.session.headers.update(
             {
-                "Authorization": f"Bearer {settings.ML_ACCESS_TOKEN}",
+                #"Authorization": f"Bearer {settings.ML_ACCESS_TOKEN}",
+                "Authorization": f"Bearer {settings.ml_token_url}",
                 "Content-Type": "application/json",
             }
         )
