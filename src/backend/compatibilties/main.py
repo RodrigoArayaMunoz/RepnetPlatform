@@ -19,6 +19,11 @@ from routers.compatibility_batch_router import router as compatibility_batch_rou
 from routers.compatibility_exception_router import router as compatibility_exception_router
 from routers.without_compatibilities_router import router as without_compatibilities_router
 
+from routers.vehicle_dictionary_router import router as vehicle_dictionary_router
+from routers.compatibility_import_router import router as compatibility_import_router
+from routers.compatibility_publish_router import router as compatibility_publish_router
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     os.makedirs(settings.upload_dir, exist_ok=True)
@@ -34,6 +39,10 @@ app.include_router(product_resolution_router)
 app.include_router(compatibility_batch_router)
 app.include_router(compatibility_exception_router)
 app.include_router(without_compatibilities_router)
+app.include_router(vehicle_dictionary_router)
+app.include_router(compatibility_import_router)
+app.include_router(compatibility_publish_router)
+
 
 
 app.add_middleware(

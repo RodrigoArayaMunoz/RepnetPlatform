@@ -7,6 +7,8 @@ import {
   ChevronDown,
   ChevronRight,
   FileSpreadsheet,
+  BookSearch,
+  Car,
   Ban,
 } from "lucide-react";
 import logo from "../../../public/logo.png";
@@ -42,6 +44,18 @@ const navItems = [
       },
     ],
   },
+    {
+    key: "diccionario",
+    label: "DICCIONARIO VEHICULAR",
+    icon: BookSearch,
+    children: [
+      {
+        to: "/diccionario/cargar-diccionario",
+        label: "Sincroinizar Diccionario Vehicular",
+        icon: Car,
+      },
+    ],
+  },
 ];
 
 export default function Sidebar({ sidebarOpen, setSidebarOpen }) {
@@ -50,6 +64,7 @@ export default function Sidebar({ sidebarOpen, setSidebarOpen }) {
   const getMenuStateFromPath = (pathname) => ({
     compatibilidades: pathname.startsWith("/compatibilidades"),
     actualizaciones: pathname.startsWith("/actualizaciones"),
+    diccionario: pathname.startsWith("/diccionario"),
   });
 
   const [openMenus, setOpenMenus] = useState(
@@ -66,6 +81,8 @@ export default function Sidebar({ sidebarOpen, setSidebarOpen }) {
         key === "compatibilidades" ? !prev.compatibilidades : false,
       actualizaciones:
         key === "actualizaciones" ? !prev.actualizaciones : false,
+      diccionario:
+        key === "diccionario" ? !prev.diccionario : false,
     }));
   };
 

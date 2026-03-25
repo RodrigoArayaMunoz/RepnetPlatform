@@ -4,6 +4,7 @@ import Home from "../src/frontend/pages/Home";
 import Compatibilidades from "./frontend/pages/CompatibilitiesUpload";
 import PreciosStock from "./frontend/pages/PriceStocksUploads";
 import NoCompatibilidades from "./frontend/pages/NoCompatibilities";
+import Diccionario from "./frontend/pages/LoadVehicleDictionary";
 
 export default function App() {
   return (
@@ -22,6 +23,10 @@ export default function App() {
           <Route
             path="/actualizaciones/precios-stock"
             element={<PreciosStock />}
+          />
+          <Route
+            path="/diccionario/cargar-diccionario"
+            element={<Diccionario />}
           />
         </Route>
       </Routes>
