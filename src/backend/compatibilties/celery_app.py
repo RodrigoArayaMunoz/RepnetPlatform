@@ -10,8 +10,8 @@ celery_app = Celery(
         "tasks.product_resolution_tasks",
         "tasks.compatibility_batch_tasks",
         "tasks.vehicle_dictionary_tasks",
-        "tasks.compatibility_publish_tasks",
-        "tasks.compatibility_publish_tasks",
+        #"tasks.compatibility_publish_tasks",
+        #"tasks.compatibility_publish_tasks",
 
     ],
 )

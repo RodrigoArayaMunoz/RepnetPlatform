@@ -1,4 +1,3 @@
-from typing import Iterable, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
 
@@ -16,56 +15,41 @@ class VehicleDictionaryRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def _bulk_upsert(self, model, rows: Iterable[dict]) -> int:
-        rows = list(rows)
+    def _upsert(self, model, rows: list[dict]) -> int:
+        """
+        Upsert masivo sobre `id` (primary key).
+        Si el registro ya existe, actualiza el nombre.
+        """
         if not rows:
             return 0
 
-        stmt = insert(model).values(rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["id"],
-            set_={"name": stmt.excluded.name},
+        stmt = (
+            insert(model)
+            .values(rows)
+            .on_conflict_do_update(
+                index_elements=["id"],          # ← tu PK es `id`, no `ml_id`
+                set_={"name": insert(model).excluded.name},
+            )
         )
-        self.db.execute(stmt)
+        result = self.db.execute(stmt)
         self.db.commit()
-        return len(rows)
+        return result.rowcount
 
-    def save_brands(self, rows: list[dict]) -> int:
-        return self._bulk_upsert(VehicleBrand, rows)
+    # Los datos de ML ya vienen como {id, name} → encajan directo con el modelo
+    def save_brands(self, items: list[dict]) -> int:
+        return self._upsert(VehicleBrand, items)
 
-    def save_models(self, rows: list[dict]) -> int:
-        return self._bulk_upsert(VehicleModel, rows)
+    def save_models(self, items: list[dict]) -> int:
+        return self._upsert(VehicleModel, items)
 
-    def save_years(self, rows: list[dict]) -> int:
-        return self._bulk_upsert(VehicleYear, rows)
+    def save_years(self, items: list[dict]) -> int:
+        return self._upsert(VehicleYear, items)
 
-    def save_versions(self, rows: list[dict]) -> int:
-        return self._bulk_upsert(VehicleVersion, rows)
+    def save_versions(self, items: list[dict]) -> int:
+        return self._upsert(VehicleVersion, items)
 
-    def save_engines(self, rows: list[dict]) -> int:
-        return self._bulk_upsert(VehicleEngine, rows)
+    def save_engines(self, items: list[dict]) -> int:
+        return self._upsert(VehicleEngine, items)
 
-    def save_transmissions(self, rows: list[dict]) -> int:
-        return self._bulk_upsert(VehicleTransmission, rows)
-
-    def _find_by_name(self, model, name: str) -> Optional[str]:
-        row = self.db.query(model).filter(model.name.ilike(name.strip())).first()
-        return row.id if row else None
-
-    def get_brand_id_by_name(self, name: str) -> Optional[str]:
-        return self._find_by_name(VehicleBrand, name)
-
-    def get_model_id_by_name(self, name: str) -> Optional[str]:
-        return self._find_by_name(VehicleModel, name)
-
-    def get_year_id_by_name(self, name: str) -> Optional[str]:
-        return self._find_by_name(VehicleYear, name)
-
-    def get_version_id_by_name(self, name: str) -> Optional[str]:
-        return self._find_by_name(VehicleVersion, name)
-
-    def get_engine_id_by_name(self, name: str) -> Optional[str]:
-        return self._find_by_name(VehicleEngine, name)
-
-    def get_transmission_id_by_name(self, name: str) -> Optional[str]:
-        return self._find_by_name(VehicleTransmission, name)
+    def save_transmissions(self, items: list[dict]) -> int:
+        return self._upsert(VehicleTransmission, items)
